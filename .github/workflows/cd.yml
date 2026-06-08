@@ -28,9 +28,9 @@ jobs:
       - name: Build Image
         run: |
           podman build \
-          -t $IMAGE_NAME:${{ github.sha }} .
+          -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
 
       - name: Push Image
         run: |
           podman push \
-          $IMAGE_NAME:${{ github.sha }}
+          ${{ env.IMAGE_NAME }}:${{ github.sha }}
