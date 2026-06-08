@@ -12,6 +12,8 @@ permissions:
 jobs:
   build-push:
     runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: ghcr.io/${{ github.repository }}
 
     steps:
       - uses: actions/checkout@v4
@@ -26,9 +28,9 @@ jobs:
       - name: Build Image
         run: |
           podman build \
-          -t ghcr.io/ashishpatel26/fastapi-app:${{ github.sha }} .
+          -t $IMAGE_NAME:${{ github.sha }} .
 
       - name: Push Image
         run: |
           podman push \
-          ghcr.io/ashishpatel26/fastapi-app:${{ github.sha }}
+          $IMAGE_NAME:${{ github.sha }}
