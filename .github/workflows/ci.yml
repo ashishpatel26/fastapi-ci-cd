@@ -18,4 +18,14 @@ jobs:
 
       - run: uv run pytest
 
-      - run: podman build -t fastapi-app .
+      - name: Build container image (with retry on transient registry failures)
+        run: |
+          for attempt in 1 2 3; do
+            podman build -t fastapi-app . && exit 0
+            if [ "$attempt" -eq 3 ]; then
+              echo "podman build failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "podman build failed on attempt ${attempt}; retrying in 10s..."
+            sleep 10
+          done
