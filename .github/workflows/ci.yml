@@ -1,0 +1,21 @@
+name: CI
+
+'on':
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - run: uv sync --frozen
+
+      - run: uv run pytest
+
+      - run: podman build -t fastapi-app .

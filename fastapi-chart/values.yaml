@@ -1,0 +1,11 @@
+image: 
+  repository: ghcr.io/ashishpatel26/fastapi-app
+  tag: v1
+
+imagePullSecrets: []
+
+replicaCount: 2
+
+service:
+  type: ClusterIP
+  port: 8000
