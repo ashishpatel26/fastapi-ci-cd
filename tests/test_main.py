@@ -11,3 +11,11 @@ SPEC.loader.exec_module(main)
 
 def test_hello_returns_production_message():
     assert main.hello() == {"message": "Hello Production"}
+
+
+def test_health_returns_ok():
+    assert main.health() == {"status": "ok"}
+
+
+def test_version_returns_version():
+    assert main.version() == {"version": "1.0.0"}
