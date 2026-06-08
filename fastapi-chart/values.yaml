@@ -1,8 +1,9 @@
-image: 
+image:
   repository: ghcr.io/ashishpatel26/fastapi-app
-  tag: v1
+  tag: latest
 
-imagePullSecrets: []
+imagePullSecrets:
+  - name: ghcr-secret
 
 replicaCount: 2
 

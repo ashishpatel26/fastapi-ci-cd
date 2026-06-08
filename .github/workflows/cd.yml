@@ -26,9 +26,10 @@ jobs:
       - name: Build Image
         run: |
           podman build \
-          -t ghcr.io/ashishpatel26/fastapi-app:${{ github.sha }} .
+          -t ghcr.io/ashishpatel26/fastapi-app:${{ github.sha }} \
+          -t ghcr.io/ashishpatel26/fastapi-app:latest .
 
       - name: Push Image
         run: |
-          podman push \
-          ghcr.io/ashishpatel26/fastapi-app:${{ github.sha }}
+          podman push ghcr.io/ashishpatel26/fastapi-app:${{ github.sha }}
+          podman push ghcr.io/ashishpatel26/fastapi-app:latest
