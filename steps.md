@@ -7,17 +7,13 @@ FastAPI
     ↓
 GitHub
     ↓
-GitHub Actions (CI)
+GitHub Actions (CI) — test + build
     ↓
-Podman Build
+GitHub Actions (CD) — push :sha + :latest to GHCR
     ↓
-GHCR (GitHub Container Registry)
+Helm upgrade
     ↓
-GitHub Actions (CD)
-    ↓
-Helm
-    ↓
-Kubernetes
+Kubernetes (Minikube)
     ↓
 Production
 ```
@@ -29,7 +25,7 @@ Production
 Install:
 
 * Git
-* Python 3.12+
+* Python 3.14+
 * uv
 * Podman Desktop
 * kubectl
@@ -54,93 +50,134 @@ minikube version
 # Step 1 - Create FastAPI Project
 
 ```bash
-uv init fastapi-project
-
-cd fastapi-project
+uv init fastapi-ci-cd
+cd fastapi-ci-cd
 ```
 
 Install dependencies:
 
 ```bash
-uv add fastapi
-uv add uvicorn
-
+uv add fastapi uvicorn
 uv add --dev pytest
 ```
 
 Project structure:
 
 ```text
-fastapi-project/
-
-├── app/
-│   └── main.py
-
+fastapi-ci-cd/
+├── main.py
 ├── tests/
-
+│   └── test_main.py
 ├── pyproject.toml
-
-├── uv.lock
-
-└── README.md
+└── uv.lock
 ```
 
 ---
 
 # Step 2 - Create FastAPI Application
 
-File:
+File `main.py`:
 
 ```python
-# app/main.py
 from fastapi import FastAPI
 
 app = FastAPI()
 
+
 @app.get("/")
 def hello():
     return {"message": "Hello Production"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/version")
+def version():
+    return {"version": "1.0.0"}
 ```
 
 Run locally:
 
 ```bash
-uv run uvicorn app.main:app --reload
+uv run uvicorn main:app --reload
 ```
 
-Open:
+Endpoints:
 
 ```text
-http://localhost:8000
+http://localhost:8000/        → {"message": "Hello Production"}
+http://localhost:8000/health  → {"status": "ok"}
+http://localhost:8000/version → {"version": "1.0.0"}
 ```
 
 ---
 
-# Step 3 - Create Dockerfile for Podman
+# Step 3 - Write Tests
 
-Create:
+File `tests/test_main.py`:
+
+```python
+import importlib.util
+import sys
+from pathlib import Path
+
+MAIN_PATH = Path(__file__).resolve().parents[1] / "main.py"
+SPEC = importlib.util.spec_from_file_location("main", MAIN_PATH)
+main = importlib.util.module_from_spec(SPEC)
+sys.modules["main"] = main
+SPEC.loader.exec_module(main)
+
+
+def test_hello_returns_production_message():
+    assert main.hello() == {"message": "Hello Production"}
+
+
+def test_health_returns_ok():
+    assert main.health() == {"status": "ok"}
+
+
+def test_version_returns_version():
+    assert main.version() == {"version": "1.0.0"}
+```
+
+Run:
+
+```bash
+uv run pytest -v
+```
+
+Expected:
+
+```text
+3 passed in 1.02s
+```
+
+---
+
+# Step 4 - Create Dockerfile
+
+Uses `ghcr.io/astral-sh/uv:python3.14-bookworm-slim` for both stages — no Docker Hub dependency, no rate limits.
 
 ```dockerfile
 # syntax=docker/dockerfile:1
 
-FROM ghcr.io/astral-sh/uv:latest AS uv
-
-
-FROM python:3.14-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS builder
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
 WORKDIR /app
 
-COPY --from=uv /uv /uvx /bin/
 COPY pyproject.toml uv.lock ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
 
-FROM python:3.14-slim AS runtime
+FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -156,31 +193,22 @@ EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-Build image:
+Build and test locally:
 
 ```bash
-podman build \
--t ghcr.io/ashishpatel26/fastapi-app:v1 .
-```
-
-Run image:
-
-```bash
-podman run -p 8000:8000 \
-ghcr.io/ashishpatel26/fastapi-app:v1
+podman build -t fastapi-app .
+podman run -p 8000:8000 fastapi-app
 ```
 
 ---
 
-# Step 4 - Push Image to GHCR
+# Step 5 - Push Image to GHCR (manual)
 
-Create GitHub Personal Access Token.
-
-Required permissions:
+Create GitHub Personal Access Token with permissions:
 
 ```text
-read:packages
 write:packages
+read:packages
 ```
 
 Login:
@@ -194,11 +222,10 @@ echo <PAT_TOKEN> | podman login ghcr.io \
 Push:
 
 ```bash
-podman push \
-ghcr.io/ashishpatel26/fastapi-app:v1
+podman push ghcr.io/ashishpatel26/fastapi-app:latest
 ```
 
-Verify package:
+Verify:
 
 ```text
 https://github.com/ashishpatel26?tab=packages
@@ -206,7 +233,7 @@ https://github.com/ashishpatel26?tab=packages
 
 ---
 
-# Step 5 - Create Kubernetes Cluster
+# Step 6 - Create Kubernetes Cluster
 
 Start Minikube:
 
@@ -229,9 +256,27 @@ minikube   Ready
 
 ---
 
-# Step 6 - Install Helm
+# Step 7 - Create GHCR Pull Secret in Kubernetes
 
-Create chart:
+Kubernetes needs credentials to pull images from GHCR:
+
+```bash
+kubectl create secret docker-registry ghcr-secret \
+  --docker-server=ghcr.io \
+  --docker-username=ashishpatel26 \
+  --docker-password=<PAT_TOKEN> \
+  --docker-email=ashishpatel.ce.2011@gmail.com
+```
+
+Verify:
+
+```bash
+kubectl get secret ghcr-secret
+```
+
+---
+
+# Step 8 - Create Helm Chart
 
 ```bash
 helm create fastapi-chart
@@ -241,25 +286,24 @@ Structure:
 
 ```text
 fastapi-chart/
-
 ├── Chart.yaml
-
 ├── values.yaml
-
-└── templates
+└── templates/
     ├── deployment.yaml
-    ├── service.yaml
-    └── ingress.yaml
+    └── service.yaml
 ```
 
 ---
 
-# Step 7 - Configure values.yaml
+# Step 9 - Configure values.yaml
 
 ```yaml
 image:
   repository: ghcr.io/ashishpatel26/fastapi-app
-  tag: v1
+  tag: latest
+
+imagePullSecrets:
+  - name: ghcr-secret
 
 replicaCount: 2
 
@@ -270,46 +314,39 @@ service:
 
 ---
 
-# Step 8 - Configure Deployment
+# Step 10 - Configure Deployment Template
 
-File:
+File `fastapi-chart/templates/deployment.yaml`:
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
-
 metadata:
   name: fastapi
-
 spec:
-
   replicas: {{ .Values.replicaCount }}
-
   selector:
     matchLabels:
       app: fastapi
-
   template:
-
     metadata:
       labels:
         app: fastapi
-
     spec:
-
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
-
-      - name: fastapi
-
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-
-        ports:
-        - containerPort: 8000
+        - name: fastapi
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          ports:
+            - containerPort: 8000
 ```
 
 ---
 
-# Step 9 - Deploy Helm Chart
+# Step 11 - Deploy Helm Chart
 
 Install:
 
@@ -321,50 +358,54 @@ Verify:
 
 ```bash
 kubectl get pods
-
 kubectl get deployments
-
 kubectl get svc
 ```
 
 ---
 
-# Step 10 - Create GitHub Repository
+# Step 12 - Access the Service
 
-Repository:
+Service type is `ClusterIP` (internal only). Use port-forward to reach it locally:
 
-```text
-fastapi-production-demo
+```bash
+kubectl port-forward svc/fastapi-fastapi-chart 8000:8000
 ```
 
-Push code:
+Then open:
+
+```text
+http://localhost:8000
+http://localhost:8000/health
+http://localhost:8000/version
+```
+
+Or switch to NodePort for persistent access:
+
+```bash
+# Edit values.yaml: service.type = NodePort
+helm upgrade fastapi ./fastapi-chart
+minikube service fastapi-fastapi-chart --url
+```
+
+---
+
+# Step 13 - Create GitHub Repository
 
 ```bash
 git init
-
 git add .
-
 git commit -m "initial commit"
-
 git branch -M main
-
-git remote add origin \
-https://github.com/ashishpatel26/fastapi-production-demo.git
-
+git remote add origin https://github.com/ashishpatel26/fastapi-ci-cd.git
 git push -u origin main
 ```
 
 ---
 
-# Step 11 - Create CI Pipeline
+# Step 14 - Create CI Pipeline
 
-File:
-
-```text
-.github/workflows/ci.yml
-```
-
-Content:
+File `.github/workflows/ci.yml`:
 
 ```yaml
 name: CI
@@ -375,13 +416,10 @@ on:
       - main
 
 jobs:
-
-  test:
-
+  build:
     runs-on: ubuntu-latest
 
     steps:
-
       - uses: actions/checkout@v4
 
       - uses: astral-sh/setup-uv@v6
@@ -393,31 +431,24 @@ jobs:
       - run: podman build -t fastapi-app .
 ```
 
-Pipeline:
+Pipeline flow:
 
 ```text
-Git Push
-   ↓
-uv sync
-   ↓
-pytest
-   ↓
-Podman Build
-   ↓
-Pass
+Git Push → uv sync → pytest → podman build → Pass
 ```
 
 ---
 
-# Step 12 - Create CD Pipeline
+# Step 15 - Create CD Pipeline
 
-File:
+Add `GHCR_TOKEN` secret to GitHub repo:
 
 ```text
-.github/workflows/cd.yml
+GitHub repo → Settings → Secrets and variables → Actions →
+New repository secret → Name: GHCR_TOKEN → Value: <PAT with write:packages>
 ```
 
-Content:
+File `.github/workflows/cd.yml`:
 
 ```yaml
 name: CD
@@ -432,18 +463,15 @@ permissions:
   contents: read
 
 jobs:
-
   build-push:
-
     runs-on: ubuntu-latest
 
     steps:
-
       - uses: actions/checkout@v4
 
       - name: Login GHCR
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | \
+          echo "${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}" | \
           podman login ghcr.io \
           -u ${{ github.actor }} \
           --password-stdin
@@ -451,65 +479,69 @@ jobs:
       - name: Build Image
         run: |
           podman build \
-          -t ghcr.io/ashishpatel26/fastapi-app:${{ github.sha }} .
+          -t ghcr.io/ashishpatel26/fastapi-app:${{ github.sha }} \
+          -t ghcr.io/ashishpatel26/fastapi-app:latest .
 
       - name: Push Image
         run: |
-          podman push \
-          ghcr.io/ashishpatel26/fastapi-app:${{ github.sha }}
+          podman push ghcr.io/ashishpatel26/fastapi-app:${{ github.sha }}
+          podman push ghcr.io/ashishpatel26/fastapi-app:latest
+```
+
+Pipeline flow:
+
+```text
+Git Push → Login GHCR → Build :sha + :latest → Push both tags → Pass
 ```
 
 ---
 
-# Step 13 - Deploy New Version
+# Step 16 - Deploy New Version After Pipeline
 
-Deploy:
-
-```bash
-helm upgrade \
-fastapi \
-./fastapi-chart \
---set image.tag=<new-tag>
-```
-
-Example:
+After CD passes, upgrade Helm to pull the latest image:
 
 ```bash
-helm upgrade \
-fastapi \
-./fastapi-chart \
---set image.tag=7fa91ab
+helm upgrade fastapi ./fastapi-chart
 ```
 
----
+Or pin to a specific commit SHA:
 
-# Step 14 - Verify Deployment
+```bash
+helm upgrade fastapi ./fastapi-chart \
+  --set image.tag=<github-sha>
+```
 
-Check:
+Verify rollout:
 
 ```bash
 kubectl get pods
-
-kubectl get deployments
-
 kubectl rollout status deployment/fastapi
-```
-
-Logs:
-
-```bash
 kubectl logs <pod-name>
-```
-
-Shell:
-
-```bash
-kubectl exec -it <pod-name> -- sh
 ```
 
 ---
 
-# Step 15 - Production Enhancements
+# Step 17 - Full End-to-End Flow
+
+```text
+Developer: git push origin main
+              ↓
+CI: uv sync → pytest (3 passed) → podman build
+              ↓
+CD: podman login ghcr.io → build :sha + :latest → push to GHCR
+              ↓
+Local: helm upgrade fastapi ./fastapi-chart
+              ↓
+Kubernetes: pulls ghcr.io/ashishpatel26/fastapi-app:latest using ghcr-secret
+              ↓
+kubectl port-forward svc/fastapi-fastapi-chart 8000:8000
+              ↓
+http://localhost:8000/health → {"status": "ok"}
+```
+
+---
+
+# Step 18 - Production Enhancements
 
 ## Secrets
 
@@ -549,9 +581,9 @@ Image Scanning
 
 ---
 
-# Step 16 - GitOps (Recommended)
+# Step 19 - GitOps (Recommended)
 
-Modern Flow:
+Modern flow:
 
 ```text
 Developer
@@ -562,7 +594,7 @@ GitHub Actions
     ↓
 Build Image
     ↓
-Push to GHCR
+Push to GHCR (:sha + :latest)
     ↓
 Update Helm Values
     ↓
@@ -573,7 +605,7 @@ ArgoCD
 Kubernetes
 ```
 
-Developer command:
+Developer only runs:
 
 ```bash
 git add .
@@ -581,30 +613,28 @@ git commit -m "new feature"
 git push origin main
 ```
 
-Everything else becomes automatic.
+Everything else automatic.
 
 ---
 
 # Final Production Stack
 
 ```text
-FastAPI
+FastAPI (3 endpoints)
  ↓
-uv
+uv (dependency management)
  ↓
-Podman
+Podman (container build)
  ↓
-GHCR (ashishpatel26)
+GHCR (ghcr.io/ashishpatel26/fastapi-app)
  ↓
-Helm
+Helm (fastapi-chart)
  ↓
-Kubernetes
+Kubernetes / Minikube
  ↓
-ArgoCD
+ArgoCD (GitOps)
  ↓
-Prometheus
- ↓
-Grafana
+Prometheus + Grafana
  ↓
 OpenTelemetry
 ```
