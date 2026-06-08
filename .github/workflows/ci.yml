@@ -18,11 +18,4 @@ jobs:
 
       - run: uv run pytest
 
-      - name: Login Docker Hub
-        run: |
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | \
-          podman login docker.io \
-          -u ${{ secrets.DOCKERHUB_USERNAME }} \
-          --password-stdin
-
       - run: podman build -t fastapi-app .
